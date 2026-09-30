@@ -1,6 +1,6 @@
 # Cordata architecture (target, v1)
 
-Status: **planned**. Nothing is implemented as of 2026-09-29. Every statement below describes the agreed target, decided in `docs/DECISIONS.md` (D-001 … D-023). The three documents in `base-docs/` are superseded inputs.
+Status: **partly implemented** (2026-09-30). Milestone A of slice 1 is built: store, snapshots, spec confirm, verifier runner, `SessionStart` projection, `Stop` gate, CLI `install | new | confirm | status | verify`. Not built yet (milestone B): journal hooks, `UserPromptSubmit` attach (D-024), tamper detection, `ConfigChange`, `tick | done | abandon`, ref pruning, large-file and sandbox warnings. Statements about those describe the agreed target. Decisions: `docs/DECISIONS.md` (D-001 … D-025). The three documents in `base-docs/` are superseded inputs.
 
 ## One sentence
 
@@ -27,15 +27,15 @@ flowchart LR
     H -- "response JSON (stdout)" --> CC
     CLI["cordata CLI"] --> CORE["core + store"]
     H --> CORE
-    CORE --> DB[("~/.cordata/<project>/cordata.sqlite (WAL) + blobs/")]
+    CORE --> DB[("~/.cordata/<project>/cordata.sqlite (WAL)")]
     CORE --> GIT[("repo .git: refs/cordata/*")]
     CORE --> SPEC["<repo>/.cordata/tasks/<id>.md"]
     H -- "Stop claim: spawns" --> V["verifier commands"]
 ```
 
 - **Hook entry** (`cordata hook <event>`): reads the event JSON from stdin, calls core, prints the response JSON to stdout, always exits 0. Installed once by `cordata install` into `~/.claude/settings.json` (D-022) as `command` hooks: `SessionStart`, `UserPromptSubmit`, `Stop` (`timeout: 1800`, D-018) synchronous; `PreToolUse`, `PostToolUse`, `PostToolUseFailure` with `async: true` and matcher `Bash|Edit|Write|NotebookEdit|mcp__.*` (D-017); `ConfigChange` async (D-020). Inert where no task is attached. The Stop process runs verifiers itself, inheriting the session's environment, unsandboxed (D-019).
-- **Core + store**: `adapters/claude` (event → core call → response shape), `core/task`, `core/acceptance`, `core/verify`, `core/journal`, `core/snapshot`, `core/projection`, `store`. SQLite via `node:sqlite`, WAL mode, busy timeout; every process opens, writes in a transaction, exits.
-- **CLI** (`cordata`): `install`, `new`, `confirm`, `status`, `verify`, `tick`, `log`, `restore`, `done`, `abandon`. `confirm`, `tick`, `done`, `abandon` are user-only: they refuse when `CLAUDE_CODE_CHILD_SESSION=1` (D-016).
+- **Core + store** (flat `src/`, D-025): `claude.ts` (the only host-aware file: event → core call → response shape, `install`), `task.ts` (lifecycle and units), `spec.ts`, `verify.ts` (runner, record path, Stop gate), `git.ts` (snapshots, refs), `projection.ts`, `store.ts`; `journal.ts` in milestone B. SQLite via `node:sqlite`, WAL mode, busy timeout; every process opens, writes in a transaction, exits.
+- **CLI** (`cordata`): `install`, `new`, `confirm`, `status`, `verify`, `tick`, `log`, `done`, `abandon` (no `restore`, D-025). `confirm`, `tick`, `done`, `abandon` are user-only: they refuse when `CLAUDE_CODE_CHILD_SESSION=1` (D-016).
 - **Skills**: `/cordata:new`, `/cordata:status`, `/cordata:confirm` as Claude Code skills that tell the model to read package scripts and CI config, draft the spec file with Edit, and then ask the user to run the user-only command in their own terminal.
 
 The adapter contract is the only host-specific code: six event kinds in (session start, prompt, tool before, tool after/failure, stop, config change) and a small response type out. A Codex adapter would map its twelve hook events onto the same contract.
@@ -50,12 +50,12 @@ Runtime state in SQLite; the task spec in a markdown file.
 | Task | id, projectId, worktreePath, branchAtCreation, title, specPath, specVersion (hash), frozenConfig (globs, fail cap), resolvedScripts, status, parentId?, after[], startTree, lastPassTree?, createdAt, updatedAt | status ∈ DRAFT, ACTIVE, VERIFIED_PENDING_MANUAL, DONE, ABANDONED. `parentId`/`after` exist in schema only (D-008) |
 | AcceptanceUnit | id, taskId, specVersion, kind (EXEC \| MANUAL), description, command?, cwd?, timeoutMs?, status, lastRunId? | status ∈ PENDING, PASS, FAIL, TICKED; `tickTree` recorded on tick, ticks persist (D-021). Tamper units carry (path, blobHash) pairs (D-020). A new confirmed version resets all to PENDING |
 | SessionAttachment | taskId, hostSessionId, transcriptPath, source (startup \| resume \| clear \| compact \| fork), startedAt, lastSeenAt | transcript referenced, never copied |
-| Action | id, taskId, hostSessionId, toolUseId, tool, inputHash, inputExcerpt, effectClass, startedAt, endedAt?, outcome (OK \| ERROR \| NO_RESULT \| UNKNOWN), outputRef? | Only Bash/Edit/Write/NotebookEdit/MCP calls (D-017); upsert by toolUseId (async hooks). effectClass ∈ LOCAL_WRITE, REMOTE_WRITE, DESTRUCTIVE (READ for read-only Bash); classified from tool name plus Bash command heuristics, marked heuristic |
+| Action | id, taskId, hostSessionId, toolUseId, tool, inputHash, inputExcerpt, effectClass, startedAt, endedAt?, outcome (OK \| ERROR \| NO_RESULT \| UNKNOWN), outputExcerpt? | Only Bash/Edit/Write/NotebookEdit/MCP calls (D-017); upsert by toolUseId (async hooks). effectClass ∈ LOCAL_WRITE, REMOTE_WRITE, DESTRUCTIVE (READ for read-only Bash); classified from tool name plus Bash command heuristics, marked heuristic |
 | VerificationRun | id, taskId, trigger (STOP \| CLI \| TICK), treeHash, treeAfter, specVersion, ref, leasePid, startedAt, endedAt, verdict (PASS \| FAIL \| ERROR), tamperFiles[] | one per gated Stop claim or `cordata verify`; a claim on an unchanged (treeHash, specVersion) reuses the last run (D-015); one running run per task (lease, D-018); treeAfter ≠ treeHash → ERROR |
-| UnitResult | runId, unitId, status, exitCode, durationMs, stdoutRef, stderrRef | |
+| UnitResult | runId, unitId, status, exitCode, signal, error, durationMs, stdout, stderr | output capped at 64 KB per stream (first 8 KB + last 56 KB), D-025 |
 | TaskEvent | seq, taskId, type, payload, at | append-only audit of status transitions and `GATE_BYPASS` records (fallback `~/.cordata/bypass.log`, D-018) |
 
-Blobs: tool outputs above a threshold, verifier stdout/stderr. Stored content-addressed under `~/.cordata/<project>/blobs/`, excerpt kept in SQLite.
+No blob files in v1 (D-025): verifier output is stored capped in SQLite; tool output keeps a 2 KB excerpt. Blob files return with observation packing.
 
 ### Task spec file
 
@@ -103,7 +103,7 @@ units:
 
 **Resume.** `SessionStart(resume|startup)` on a task with UNKNOWN actions lists them; nothing is retried automatically. `cordata status` prints the last host session id so the user can `claude --resume <id>`.
 
-**Restore.** `cordata restore <run>` writes the snapshot tree into the worktree with `git restore --source=<tree> --worktree -- .`, which leaves the index untouched (invariant 6; `git checkout <tree> -- .` would stage). Untracked files absent from the snapshot are left in place. Refuses on a dirty tree unless `--force`, and snapshots the current state first.
+**Restore.** No command (D-025): `cordata status` prints `git restore --source=<tree> --worktree -- .` for each retained run, which leaves the index untouched (invariant 6; `git checkout <tree> -- .` would stage). Untracked files absent from the snapshot are left in place.
 
 **Manual.** `cordata tick <unit>` marks TICKED with its tree. DONE requires every EXEC unit PASS on the current tree and every MANUAL unit TICKED; if the tree changed since the last PASS, `tick` runs the EXEC units in the user's terminal (PASS → DONE, FAIL → ACTIVE) (D-021). `cordata done`/`abandon` are explicit overrides recorded as TaskEvents. All four are user-only (D-016).
 
@@ -120,13 +120,13 @@ units:
 
 ## Configuration
 
-- `~/.cordata/config.json`: blob threshold bytes, retention days after DONE/ABANDONED (default 30), large-file warning threshold (default 10 MB).
+- No `~/.cordata/config.json` (D-025): retention days (30), large-file threshold (10 MB), budget and marker are constants in `src/store.ts`. `CORDATA_HOME` overrides the state root (used by `scripts/smoke.sh`).
 - `<repo>/.cordata/config.json`: tamper globs (default list in D-020) and stop-fail cap; frozen into the task at `confirm`.
 - Hooks: user level, written once by `cordata install` into `~/.claude/settings.json`.
 
 ## Setup (planned)
 
-`npm i -g cordata` → `cordata install` once. No per-repo setup; `cordata new` prepares a repo on first use. Enabling Claude Code's sandbox is recommended (D-012), but Cordata's verifiers still run outside it until wrapping lands (D-019); Cordata warns while the sandbox is on.
+`npm install && npm link` in this repo → `cordata install` once (writes exec-form hooks with absolute `node` and `src/cli.ts` paths; Node ≥ 24.15 runs the TypeScript directly). No per-repo setup; `cordata new` prepares a repo on first use. Enabling Claude Code's sandbox is recommended (D-012), but Cordata's verifiers still run outside it until wrapping lands (D-019); Cordata warns while the sandbox is on.
 
 ## Deferred, with triggers
 

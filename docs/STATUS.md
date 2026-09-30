@@ -1,41 +1,44 @@
 # Current status
 
 Updated: 2026-09-30
-Checkout: planning docs committed on branch `planning-docs` (off `main` 6695338). No code.
+Checkout: branch `slice-1` (off `planning-docs` → `main` 6695338). Milestone A committed on `slice-1`. `main` still holds only the initial commit; merging is the user's call.
 
 ## Current objective
 
-Red-team the plan and resolve every finding before implementation. **Done 2026-09-29.** Findings in `docs/research/2026-09-29-plan-redteam.md`; all 21 resolved with the user as D-014 … D-023 (grill-style interview for D-018 … D-023). `docs/ARCHITECTURE.md`, README, AGENTS, TREE match the decisions.
+Slice 1 (plan approved 2026-09-30): a durable task whose "done" is gated by Cordata running the declared verifiers on a pinned git tree snapshot, plus what dogfooding needs. Two milestones: **A** the gate end to end (done), **B** the rest. Decisions for this slice: D-024 (attach on prompt), D-025 (tooling, cuts, fail-cap wording).
 
 ## Current state
 
-- Plan: D-001 … D-023 accepted; no open red-team finding.
-- No implementation, no tests, no package.json.
+Milestone A done:
+- `src/` flat layout (see `docs/TREE.md`): store, git snapshots, spec parse/validate/hash with script resolution, task new/confirm/attach, verifier runner, lease, (tree, specVersion) reuse, Stop gate (marker, FAIL cap 3 blocks, ERROR once, GATE_BYPASS on internal failure), SessionStart projection (≤ 4,000 chars, drift and branch notes), `cordata status` with restore commands and session ids.
+- CLI: `install [--settings]`, `new`, `confirm` (user-only), `status`, `verify [--force]`, `hook <Event>`.
+- `install` already writes all seven hooks (journal, prompt and ConfigChange ones return `{}` until milestone B), so no re-install is needed later.
 
-## Next actions
+## Next actions (milestone B)
 
-1. Implementation slice 1:
-   1. `package.json` (TypeScript strict, vitest, `node:sqlite`; `yaml` for frontmatter).
-   2. `store/sqlite.ts` (WAL, busy timeout, run lease) for the records in `docs/ARCHITECTURE.md`; `core/spec.ts` parse/validate, script resolution, specVersion hash (D-021).
-   3. `core/snapshot.ts`: project id from git common dir (D-022), temp index seeded from a copy of the real index, `write-tree`, `refs/cordata/<task>/<run>`, retention pruning, restore via `git restore --source --worktree`. Unit test on a fixture repo.
-   4. `core/verify.ts`: EXEC units with timeouts and budget, before/after tree check, FAIL vs ERROR, tamper (globs, scripts, (path, blob) dedup), (tree, specVersion) reuse (D-018, D-020).
-   5. `cli.ts hook <event>` + `adapters/claude.ts`: `SessionStart` (5 sources, 4k projection), `UserPromptSubmit`, `Stop` gate (D-015, D-018), async journal hooks (D-017), `ConfigChange` (D-020). Fail-open with `GATE_BYPASS`.
-   6. CLI: `install`, `new`, `confirm`, `status`, `verify`, `tick` (re-verifies, D-021), `restore`; user-only guard (D-016).
-   7. Fixture e2e by piping hook JSON: marked claim with failing test blocks → fix → claim passes; unmarked Stop passes without running; ERROR blocks once; session dies mid-tool → next SessionStart lists UNKNOWN action.
-   8. One real smoke through Claude Code (headless, `--model haiku`) of the Stop gate.
-2. Dogfood; log false blocks, unmarked completion claims, gate bypasses, and time-to-resume (D-013, D-015, D-018).
+1. `src/journal.ts`: `classify`, `mentionsCordata`, `recordTool` (upsert by tool_use_id; Pre never overwrites an outcome, Post always does), `closeOpen` → NO_RESULT, `markUnknown`. Wire `PreToolUse`/`PostToolUse`/`PostToolUseFailure` in `src/claude.ts` (print nothing: async stdout reaches Claude next turn).
+2. `UserPromptSubmit`: close open actions as NO_RESULT; D-024 attach + one-time projection. SessionStart marks other sessions' open actions UNKNOWN; projection lists UNKNOWN actions newer than the last run.
+3. Tamper (D-020, D-025): diff frozen globs (basename rule for globs without `/`) and resolved scripts against `start_tree` per run; `tamper_pair` INSERT OR IGNORE; one open `~tamper` MANUAL unit; `ConfigChange` → `hooksIntact`; Bash mentioning user-only verbs / `~/.cordata` / `cordata.sqlite` → pair.
+4. `tick` (re-verifies when tree ≠ `last_pass_tree`), `done`, `abandon` (user-only, TaskEvents).
+5. `prune` after each run (keep start + last PASS + last 5; closed > 30 days: drop), set `run.ref = NULL`.
+6. Warnings: large untracked files (> 10 MB), sandbox enabled, other session active in the last 30 min, GATE_BYPASS count, installed hook paths missing (nvm upgrade).
+7. Tests E9–E12 (see plan), re-run `scripts/smoke.sh`, then docs checkpoint and commit. Then the user runs `npm link && cordata install` and dogfoods.
 
 ## Blockers and questions
 
-- None blocking slice 1.
-- Open: license if published (user's choice).
+- None blocking. Open: license if published (user's choice).
 
 ## Validation
 
-No code. Checked 2026-09-30: `CLAUDE_CODE_CHILD_SESSION=1` in both the model's Bash tool and the user's `!` shell mode (D-016: user-only verbs need a separate terminal). `@anthropic-ai/sandbox-runtime` 0.0.78 on npm ships CLI `srt` (`srt [--settings file] <cmd>`, config `~/.srt-settings.json`, uses bubblewrap on Linux) — read from the npm readme, not executed; D-019's revisit also needs `bwrap` installed. Checked 2026-09-29: raw docs from code.claude.com (hooks, sandboxing, permission-modes, env-vars, tools-reference, interactive-mode, goal); local `node:sqlite` works on Node 24.15.0; tree refs under `refs/cordata/*` survive `git log --all`/`gc`/`fsck` on git 2.34.1; `git checkout <tree> -- .` writes the index, `git restore --source=<tree> --worktree -- .` does not; `bwrap` not installed; Node cold start + sqlite WAL insert 20–40 ms. Headless Stop-hook smoke on Claude Code 2.1.284 (`--model haiku`): block shape and `stop_hook_active` behave as the docs say.
+2026-09-30 on `slice-1`, repo root, Node 24.15.0, git 2.34.1:
+- `npm run typecheck`: clean (tsc 7.0.2; confirmed it reports a deliberate type error and covers all 14 project files).
+- `npm test`: 28/28 pass (unit: git, spec, runner, verify, projection, install/guard/inert hooks; e2e E1–E8).
+- `scripts/smoke.sh` against Claude Code 2.1.285 (`--model haiku`, `--setting-sources project`): SMOKE PASS — run #1 FAIL blocked the first `[cordata:ready]` claim, haiku fixed the file, run #2 PASS, task DONE.
+- Not run: `cordata install` against the real `~/.claude/settings.json` (user's step).
 
 ## Resumption notes
 
-- The interview answers are not persisted verbatim; the decisions are. Every branch chose the recommended option except where D-001 records "coding first, generic core".
-- If a future session is tempted to reintroduce Pi, Herdr, Tencent, a DAG scheduler or a context compiler, read D-004, D-005, D-008, D-009 and D-011 first; the rejections have stated triggers for revisiting.
-- Research briefs produced by subagents contained confident errors about hook contracts; verify host details against the raw `.md` docs (`curl https://code.claude.com/docs/en/<page>.md`) rather than summaries.
+- Plan file with schema, git sequences, gate pseudo-code and the full test list: `~/.claude/plans/start-planning-the-slice-smooth-sloth.md` (outside the repo; ARCHITECTURE and D-024/D-025 hold the durable parts).
+- Hooks are exec form (`command` = `process.execPath`, `args` = `[<abs>/src/cli.ts, "hook", <Event>]`); Cordata entries are recognised by `args[0]` ending in `/src/cli.ts`.
+- `CORDATA_HOME` overrides `~/.cordata`; tests use a temp `HOME`, the smoke uses `CORDATA_HOME` so Claude keeps its login.
+- Research briefs produced by subagents contained confident errors about hook contracts; verify host details against the raw `.md` docs (`curl https://code.claude.com/docs/en/<page>.md`).

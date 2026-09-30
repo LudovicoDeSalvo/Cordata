@@ -6,7 +6,21 @@ Cordata is a local, hook-driven tool (no daemon) that keeps a coding task alive 
 
 ## Status
 
-Planning complete and red-teamed, no code yet (2026-09-29). Architecture and decisions are in `docs/`. Implementation starts with the vertical slice described in `docs/STATUS.md`.
+Slice 1, milestone A works (2026-09-30): create and confirm a task, `SessionStart` projection, and the `Stop` gate that runs the EXEC units on a pinned snapshot when Claude's final message contains `[cordata:ready]`. Journal, tamper detection and `tick` (milestone B) are next; see `docs/STATUS.md`.
+
+## Setup (dogfooding)
+
+Requires Node ≥ 24.15 and git ≥ 2.31. No build step.
+
+```sh
+npm install && npm link        # in this repo; puts `cordata` on PATH
+cordata install                # once: adds hooks to ~/.claude/settings.json (backup written)
+cd <your repo>
+cordata new "Add refresh tokens"   # writes .cordata/tasks/t-0001.md; fill in units and Goal
+cordata confirm                    # in your own terminal, not through Claude (D-016)
+```
+
+`cordata status` shows the task, runs, snapshot restore commands and sessions; `cordata verify` runs the units on demand.
 
 ## Intended v1 capabilities
 
@@ -28,7 +42,7 @@ Solo developer, part-time, own WSL2 machine, Claude Team seat as the only model 
 - `docs/ARCHITECTURE.md` — target architecture, data model, flows, invariants
 - `docs/DECISIONS.md` — accepted decisions with rationale and rejected alternatives
 - `docs/STATUS.md` — current state and next actions
-- `docs/TREE.md` — repository map and planned layout
+- `docs/TREE.md` — repository map
 - `docs/research/` — dated research briefs
 - `base-docs/` — original research inputs, superseded where they conflict with decisions
 - `AGENTS.md` — working rules for agents

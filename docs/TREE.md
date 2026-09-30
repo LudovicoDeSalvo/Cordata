@@ -1,41 +1,26 @@
 # Repository map
 
-Current contents (2026-09-29):
+Current contents (2026-09-30):
 
 | Path | Purpose |
 |---|---|
-| `README.md` | Project purpose, status, links |
-| `AGENTS.md`, `CLAUDE.md` | Agent entry points and project-memory protocol |
-| `docs/ARCHITECTURE.md` | Target v1 architecture |
-| `docs/DECISIONS.md` | Accepted decisions D-001 … D-023 and open items |
+| `README.md` | Project purpose, status, setup, links |
+| `AGENTS.md`, `CLAUDE.md` | Agent entry points, project-memory protocol, commands |
+| `package.json`, `tsconfig.json` | One package, no build step (Node ≥ 24.15 runs `.ts`); `npm test`, `npm run typecheck` |
+| `src/cli.ts` | Entry point and `bin`: `install`, `new`, `confirm`, `status`, `verify`, `hook <Event>`; user-only guard (D-016) |
+| `src/claude.ts` | The only Claude Code-aware file: hook stdin → core → response JSON; `installHooks` settings merge |
+| `src/store.ts` | SQLite schema (`node:sqlite`, WAL), `tx`, `event`, bypass log, `CONFIG` constants |
+| `src/git.ts` | Repo/project resolution, temp-index `writeTree`, `refs/cordata/*`, info/exclude; strips `GIT_*` env |
+| `src/spec.ts` | Task spec parse/validate, package-script resolution, spec version hash, skeleton, default tamper globs |
+| `src/task.ts` | Task lifecycle and units: new, confirm, attach, lookups |
+| `src/verify.ts` | Verifier runner (process groups, timeouts, capped output), the single record path, lease, reuse, Stop gate |
+| `src/projection.ts` | SessionStart projection, Stop block reason (≤ 4,000 chars), `cordata status` text |
+| `test/` | `node:test` suites; `helpers.ts` builds temp repos and pipes hook JSON; `e2e.test.ts` covers E1–E8 |
+| `scripts/smoke.sh` | Real headless Claude Code run of the Stop gate (uses plan usage; not in `npm test`) |
+| `docs/ARCHITECTURE.md` | v1 architecture; header says what is built |
+| `docs/DECISIONS.md` | Accepted decisions D-001 … D-025 and open items |
 | `docs/STATUS.md` | Current task snapshot and next actions |
-| `docs/research/` | Dated research briefs that ground the decisions (Pi/Herdr, executors, memory, harness SOTA, Claude Code contracts, plan red-team) |
-| `base-docs/` | The three original deep-research inputs (spec, review, harness/graph research). Superseded where they conflict with `docs/DECISIONS.md` |
+| `docs/research/` | Dated research briefs that ground the decisions |
+| `base-docs/` | The three original deep-research inputs. Superseded where they conflict with `docs/DECISIONS.md` |
 
-Planned layout for the implementation (not yet created; adjust freely when coding starts):
-
-```
-cordata/
-├── package.json             # single package: CLI, hook entry, adapter, skills
-├── src/
-│   ├── cli.ts               # install | new | confirm | status | verify | tick | log | restore | done | abandon | hook <event>
-│   ├── adapters/
-│   │   └── claude.ts        # Claude Code hook events → core; response shaping
-│   ├── core/
-│   │   ├── task.ts          # lifecycle, project/worktree resolution
-│   │   ├── spec.ts          # task spec file parse, validate, hash
-│   │   ├── acceptance.ts    # units, status transitions, reset on spec change
-│   │   ├── verify.ts        # snapshot → tamper diff → run units → record
-│   │   ├── journal.ts       # actions, effect classifier
-│   │   ├── snapshot.ts      # temp-index write-tree, refs/cordata/*, restore
-│   │   └── projection.ts    # SessionStart additionalContext text
-│   └── store/
-│       ├── sqlite.ts        # schema + migrations
-│       └── blobs.ts         # content-addressed blob files
-├── skills/
-│   ├── cordata-new/SKILL.md
-│   ├── cordata-status/SKILL.md
-│   └── cordata-confirm/SKILL.md
-├── test/                    # unit tests + fixture e2e
-└── fixtures/demo-repo/      # tiny repo with a failing test for the e2e
-```
+Planned for milestone B: `src/journal.ts` (action journal, effect classifier). Skills (`skills/cordata-*/SKILL.md`) come after slice 1.

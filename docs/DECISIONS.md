@@ -242,6 +242,33 @@ Architecture decisions for Cordata. Status `accepted` means the user confirmed i
 - Alternatives: use the full 10k; skip fork; skip or rebind the gate on a branch switch.
 - References: F17, F19; amends D-011.
 
+## D-024: Attach on prompt
+
+- Status: accepted
+- Date: 2026-09-30
+- Context: in the planned flow (`/cordata:new` drafts the spec, the user runs `cordata confirm` in another terminal, work continues in the same session), `SessionStart` has already fired, so the session is never attached: no projection, no marker, no gate until `/clear` or a restart. Found while planning slice 1.
+- Decision: on `UserPromptSubmit`, if the session has no attachment and its worktree has an open task, attach it and inject the projection once through `additionalContext`.
+- Alternatives: document "restart after confirm" (easy to forget; the gate silently stays off).
+- Consequences: one extra DB read per prompt in sessions without a task; the prompt hook is synchronous (30 s host timeout).
+- References: amends D-008, D-023.
+
+## D-025: Slice-1 implementation choices
+
+- Status: accepted
+- Date: 2026-09-30
+- Context: slice-1 planning found cuts and underspecified details; the user chose on 2026-09-30.
+- Decision:
+  - Tooling: no build step (Node ≥ 24.15 strips types), `node:test`, `tsc --noEmit`, no eslint; runtime dependency `yaml` only. Flat `src/` layout.
+  - No blob files: verifier stdout/stderr are stored in SQLite capped at 64 KB per stream (first 8 KB + last 56 KB); tool output keeps a 2 KB excerpt. Blob files return with observation packing (v1.1).
+  - No `restore` command: `cordata status` prints `git restore --source=<tree> --worktree -- .` for each retained run.
+  - `~/.cordata/config.json` replaced by constants until a value needs to change.
+  - failCap is the maximum number of blocks per continuation chain: FAIL runs 1–3 block, the 4th consecutive FAIL allows the stop (clarifies D-015's wording).
+  - Unit status gains ERROR (verdicts of D-018 per unit).
+  - A tamper glob without `/` matches the basename at any depth (gitignore rule).
+  - One open TAMPER unit per task collects new (path, blob) pairs; it survives a re-confirm (the D-021 reset applies to spec units).
+- Alternatives: vitest + eslint + tsc build (more dependencies, a build step); blob files and `restore` in slice 1 (more code before first dogfooding).
+- References: amends D-010, D-013, D-015, D-020, D-021, D-022.
+
 ## Open items (not decisions)
 
 - License if ever published: undecided; MIT likely.
