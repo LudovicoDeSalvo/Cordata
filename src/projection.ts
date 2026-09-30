@@ -78,15 +78,29 @@ export function drift(task: Task): string | null {
   return `the spec file's ${changed.join(', ')} differ from the confirmed version; the gate uses the confirmed version until the user runs \`cordata confirm\``;
 }
 
-function warnings(task: Task, run: Run | undefined): string[] {
+function warnings(db: DB, task: Task, run: Run | undefined): string[] {
   const w: string[] = [];
   const d = drift(task);
   if (d) w.push(d);
   if (run?.warnings) w.push(...(JSON.parse(run.warnings) as string[]));
+  const { n } = db
+    .prepare("SELECT count(*) AS n FROM task_event WHERE task_id = ? AND type = 'GATE_BYPASS' AND at > ?")
+    .get(task.id, run?.ended_at ?? 0) as { n: number };
+  if (n) w.push(`the Stop gate was bypassed ${n} time(s) since the last run by an internal Cordata error (details: \`cordata status\`)`);
   return w;
 }
 
-function body(db: DB, task: Task, l: Level): string[] {
+type ActionRow = { tool: string; input_excerpt: string; effect_class: string; started_at: number };
+
+/** Calls a dead session left open (D-017), newer than the last run. */
+function unknownActions(db: DB, task: Task, run: Run | undefined): string[] {
+  const rows = db
+    .prepare("SELECT tool, input_excerpt, effect_class, started_at FROM action WHERE task_id = ? AND outcome = 'UNKNOWN' AND started_at > ? ORDER BY started_at DESC")
+    .all(task.id, run?.started_at ?? 0) as ActionRow[];
+  return rows.map((a) => `- ${a.tool} \`${a.input_excerpt.split('\n')[0]!.slice(0, 160)}\` (${a.effect_class}, heuristic) at ${when(a.started_at)}`);
+}
+
+function body(db: DB, task: Task, l: Level, extra: string[] = []): string[] {
   const spec = JSON.parse(task.confirmed_spec!) as { goal: string; constraints: string };
   const us = units(db, task.id);
   const run = lastRun(db, task);
@@ -102,7 +116,9 @@ function body(db: DB, task: Task, l: Level): string[] {
     const cmds = new Map(us.map((u) => [u.id, u.command]));
     lines.push(...collapse(failureLines(runResults(db, run.id), cmds, l), l.list === Infinity ? Infinity : l.list * 2));
   } else lines.push('No verification run yet.');
-  const w = warnings(task, run);
+  const unknown = unknownActions(db, task, run);
+  if (unknown.length) lines.push('Tool calls with unknown outcome (the session ended during the call; nothing is retried):', ...collapse(unknown, l.list));
+  const w = [...warnings(db, task, run), ...extra];
   if (w.length) lines.push('Notes:', ...collapse(w.map((x) => `- ${x}`), l.list));
   return lines;
 }
@@ -112,8 +128,8 @@ const COMPLETION =
   'snapshot of the worktree, and a failure keeps the session going with the evidence. A claim on an unchanged tree reuses the last result.';
 
 /** SessionStart / attach context, capped (D-023). Factual wording, no system-style commands. */
-export function projection(db: DB, task: Task): string {
-  return fitCap((l) => [...body(db, task, l), COMPLETION].join('\n'));
+export function projection(db: DB, task: Task, extra: string[] = []): string {
+  return fitCap((l) => [...body(db, task, l, extra), COMPLETION].join('\n'));
 }
 
 export function blockReason(db: DB, task: Task, r: RunOutcome): string {
@@ -136,7 +152,7 @@ export function blockReason(db: DB, task: Task, r: RunOutcome): string {
 }
 
 /** `cordata status`: uncapped, with runs, snapshot refs and resumable sessions. */
-export function statusText(db: DB, root: string, task?: Task): string {
+export function statusText(db: DB, root: string, task?: Task, extra: string[] = []): string {
   if (!task) {
     const rows = db.prepare('SELECT id, title, status FROM task WHERE worktree_path = ? ORDER BY created_at DESC LIMIT 10').all(root) as Pick<
       Task,
@@ -145,7 +161,7 @@ export function statusText(db: DB, root: string, task?: Task): string {
     return rows.length ? ['No open task here. Recent tasks:', ...rows.map((t) => `- ${t.id} ${t.status}: ${t.title}`)].join('\n') : 'No Cordata task in this worktree.';
   }
   if (task.status === 'DRAFT') return `Task ${task.id} "${task.title}" is DRAFT. Edit ${task.spec_path}, then run \`cordata confirm ${task.id}\` in your own terminal.`;
-  const out = body(db, task, LEVELS[0]!);
+  const out = body(db, task, LEVELS[0]!, extra);
   const runs = db.prepare('SELECT * FROM run WHERE task_id = ? ORDER BY id DESC LIMIT 10').all(task.id) as Run[];
   if (runs.length) {
     out.push('Runs (newest first; restore a snapshot with the printed command, it leaves the index untouched):');

@@ -102,3 +102,26 @@ test('projection stays under the cap, trimming excerpts before collapsing lists 
   assert.ok(text.includes('error line 120'), 'keeps the last stderr line');
   assert.ok(text.endsWith('full state: `cordata status`'));
 });
+
+test('diffTrees reports changes and deletes; prune keeps start, last PASS and the last 5 runs (D-022)', async () => {
+  const { db, repo, task, root } = setup(['grep -q 42 answer.txt'], { 'gone.txt': 'x' });
+  const { diffTrees, listRefs, writeTree } = await import('../src/git.ts');
+  const { unlinkSync } = await import('node:fs');
+  unlinkSync(join(root, 'gone.txt'));
+  writeFileSync(join(root, 'answer.txt'), '42\n');
+  const d = diffTrees(root, task.start_tree, writeTree(root));
+  assert.deepEqual(d.map((p) => p.path).sort(), ['answer.txt', 'gone.txt']);
+  assert.match(d.find((p) => p.path === 'gone.txt')!.blob, /^0+$/);
+
+  const pass = await verify(db, repo, task, { trigger: 'CLI', deadline: far() }); // run 1 PASS → DONE; reopen to keep going
+  db.prepare("UPDATE task SET status = 'ACTIVE', closed_at = NULL WHERE id = ?").run(task.id);
+  writeFileSync(join(root, 'answer.txt'), '1\n');
+  for (let i = 0; i < 7; i++) {
+    writeFileSync(join(root, 'n.txt'), String(i));
+    await verify(db, repo, getTask(db, task.id)!, { trigger: 'CLI', deadline: far() });
+  }
+  const refs = listRefs(root, `refs/cordata/${task.id}/`).map((r) => r.split('/').pop()).sort();
+  assert.deepEqual(refs, ['1', '4', '5', '6', '7', '8', 'start'].sort());
+  assert.equal(pass.run.id, 1);
+  assert.equal((db.prepare('SELECT count(*) AS n FROM run WHERE ref IS NULL').get() as { n: number }).n, 2);
+});

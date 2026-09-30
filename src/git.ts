@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -77,4 +77,38 @@ export function addExclude(root: string, line: string): void {
 
 export function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
+}
+
+/** Changed paths between two trees with the new blob (all zeros = deleted). Parsed by whitespace: works for SHA-256 repos. */
+export function diffTrees(root: string, from: string, to: string): { path: string; blob: string }[] {
+  const out = git(root, ['diff-tree', '-r', '-z', '--no-renames', from, to]).split('\0');
+  const pairs: { path: string; blob: string }[] = [];
+  for (let i = 0; i + 1 < out.length; i += 2) {
+    const meta = out[i]!.trim().split(/\s+/); // ":oldmode newmode oldsha newsha status"
+    if (meta.length >= 5) pairs.push({ path: out[i + 1]!, blob: meta[3]! });
+  }
+  return pairs;
+}
+
+/** Untracked, non-ignored files above `min` bytes (read-only; the real index is not refreshed). */
+export function largeUntracked(root: string, min: number): { path: string; bytes: number }[] {
+  const big: { path: string; bytes: number }[] = [];
+  for (const p of git(root, ['ls-files', '-z', '-o', '--exclude-standard']).split('\0')) {
+    if (!p) continue;
+    try {
+      const { size } = statSync(join(root, p));
+      if (size > min) big.push({ path: p, bytes: size });
+    } catch {
+      // vanished meanwhile
+    }
+  }
+  return big;
+}
+
+export function listRefs(root: string, prefix: string): string[] {
+  return git(root, ['for-each-ref', '--format=%(refname)', prefix]).split('\n').filter(Boolean);
+}
+
+export function deleteRefs(root: string, refs: string[]): void {
+  if (refs.length) git(root, ['update-ref', '--stdin'], {}, refs.map((r) => `delete ${r}\n`).join(''));
 }

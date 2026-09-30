@@ -148,3 +148,37 @@ export function units(db: DB, taskId: string): Unit[] {
 export function frozen(task: Task): FrozenConfig {
   return JSON.parse(task.frozen_config!) as FrozenConfig;
 }
+
+export const TAMPER_ID = '~tamper'; // spec ids must start with [A-Za-z0-9], so no collision
+
+/**
+ * Records (path, blob) tamper evidence; content already seen is ignored (D-020 dedup). Any new pair reopens the one
+ * TAMPER unit (D-025). Returns the newly added pairs.
+ */
+export function addTamper(db: DB, task: Task, pairs: { path: string; blob: string }[], runId: number | null): { path: string; blob: string }[] {
+  const now = Date.now();
+  const ins = db.prepare('INSERT OR IGNORE INTO tamper_pair(task_id, path, blob, unit_id, run_id, at) VALUES (?, ?, ?, ?, ?, ?)');
+  const added = pairs.filter((p) => Number(ins.run(task.id, p.path, p.blob, TAMPER_ID, runId, now).changes) > 0);
+  if (!added.length) return added;
+  const prev = db.prepare('SELECT ticked_at FROM unit WHERE task_id = ? AND id = ?').get(task.id, TAMPER_ID) as { ticked_at: number | null } | undefined;
+  const paths = (db.prepare('SELECT DISTINCT path FROM tamper_pair WHERE task_id = ? AND at > ? ORDER BY path').all(task.id, prev?.ticked_at ?? 0) as {
+    path: string;
+  }[]).map((r) => r.path);
+  const shown = paths.length > 8 ? [...paths.slice(0, 8), `+${paths.length - 8} more`] : paths;
+  db.prepare(
+    `INSERT INTO unit(task_id, id, ord, spec_version, origin, kind, description, status) VALUES (?, ?, 1000, ?, 'TAMPER', 'MANUAL', ?, 'PENDING')
+     ON CONFLICT(task_id, id) DO UPDATE SET status = 'PENDING', description = excluded.description, tick_tree = NULL`,
+  ).run(task.id, TAMPER_ID, task.spec_version ?? '', `review changes to verifier files, scripts or Cordata state: ${shown.join(', ')}`);
+  event(db, task.id, 'TAMPER', { runId, added });
+  return added;
+}
+
+/** User override: DONE or ABANDONED regardless of units, recorded as a TaskEvent. */
+export function closeTask(db: DB, task: Task, status: 'DONE' | 'ABANDONED'): void {
+  if (task.status === 'DONE' || task.status === 'ABANDONED') throw new Error(`task ${task.id} is already ${task.status}`);
+  const now = Date.now();
+  tx(db, () => {
+    db.prepare('UPDATE task SET status = ?, closed_at = ?, updated_at = ? WHERE id = ?').run(status, now, now, task.id);
+    event(db, task.id, status === 'DONE' ? 'DONE_OVERRIDE' : 'ABANDONED', { from: task.status });
+  });
+}

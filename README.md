@@ -6,7 +6,7 @@ Cordata is a local, hook-driven tool (no daemon) that keeps a coding task alive 
 
 ## Status
 
-Slice 1, milestone A works (2026-09-30): create and confirm a task, `SessionStart` projection, and the `Stop` gate that runs the EXEC units on a pinned snapshot when Claude's final message contains `[cordata:ready]`. Journal, tamper detection and `tick` (milestone B) are next; see `docs/STATUS.md`.
+Slice 1 is implemented (2026-09-30) and awaits dogfooding: create and confirm a task, `SessionStart` projection, the `Stop` gate that runs the EXEC units on a pinned snapshot when Claude's final message contains `[cordata:ready]`, the action journal, tamper detection and `tick`. See `docs/STATUS.md`.
 
 ## Setup (dogfooding)
 
@@ -20,7 +20,7 @@ cordata new "Add refresh tokens"   # writes .cordata/tasks/t-0001.md; fill in un
 cordata confirm                    # in your own terminal, not through Claude (D-016)
 ```
 
-`cordata status` shows the task, runs, snapshot restore commands and sessions; `cordata verify` runs the units on demand.
+`cordata status` shows the task, runs, snapshot restore commands and sessions; `cordata verify` runs the units on demand; `cordata tick <unit>` accepts a MANUAL unit; `cordata done | abandon` close a task. `confirm`, `tick`, `done` and `abandon` refuse to run inside Claude Code, including `!` mode.
 
 ## Intended v1 capabilities
 

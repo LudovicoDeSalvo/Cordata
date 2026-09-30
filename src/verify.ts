@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, matchesGlob, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { branch, pinRef, writeTree, type Repo } from './git.ts';
+import { branch, deleteRefs, diffTrees, largeUntracked, listRefs, pinRef, sha256, writeTree, type Repo } from './git.ts';
+import { resolveScripts, type Scripts, type UnitSpec } from './spec.ts';
 import { CONFIG, event, tx, type DB } from './store.ts';
 import { blockReason } from './projection.ts';
-import { frozen, getTask, units, type Task, type Unit } from './task.ts';
+import { addTamper, frozen, getTask, units, type Task, type Unit } from './task.ts';
 
 export type Verdict = 'PASS' | 'FAIL' | 'ERROR';
 export type UnitResult = {
@@ -217,6 +218,11 @@ export async function verify(
     const head = branch(root);
     if (head !== task.branch_at_creation)
       warnings.push(`HEAD is on ${head ?? 'a detached commit'}; the task was created on ${task.branch_at_creation ?? 'a detached commit'}`);
+    const big = largeUntracked(root, CONFIG.largeFileBytes);
+    if (big.length)
+      warnings.push(`large untracked files are in the snapshot (consider .gitignore): ${big.map((b) => `${b.path} (${Math.round(b.bytes / 1048576)} MB)`).join(', ')}`);
+    const flagged = tamperCheck(db, task, tree, runId);
+    if (flagged.length) db.prepare('UPDATE run SET tamper = ? WHERE id = ?').run(JSON.stringify(flagged), runId);
 
     const results: UnitResult[] = [];
     for (const u of units(db, task.id)) if (u.origin === 'SPEC' && u.kind === 'EXEC') results.push(await runUnit(u, root, o.deadline));
@@ -229,6 +235,11 @@ export async function verify(
     } else verdict = results.some((r) => r.status === 'FAIL') ? 'FAIL' : results.some((r) => r.status === 'ERROR') ? 'ERROR' : 'PASS';
 
     record(db, task, runId, { verdict, tree, after, note, warnings, results });
+    try {
+      prune(db, root);
+    } catch (e) {
+      event(db, task.id, 'PRUNE_ERROR', { error: String(e).slice(0, 500) }); // never a bypass
+    }
     return { run: db.prepare('SELECT * FROM run WHERE id = ?').get(runId) as Run, reused: false, results };
   } finally {
     db.prepare("UPDATE run SET ended_at = ?, note = coalesce(note, 'aborted') WHERE id = ? AND ended_at IS NULL").run(Date.now(), runId);
@@ -309,4 +320,61 @@ export async function stopGate(db: DB, repo: Repo, task: Task, ev: StopEvent, de
   }
   event(db, task.id, 'ERROR_ALLOW', { runId: run.id, session: ev.sessionId });
   return { run: r, message: `Cordata run #${run.id} ERROR again; stop allowed. Task stays ACTIVE.` };
+}
+
+/** Test/CI/lint files and package scripts changed since task start become tamper evidence (D-020, D-025). */
+export function tamperCheck(db: DB, task: Task, tree: string, runId: number | null): { path: string; blob: string }[] {
+  const { globs } = frozen(task);
+  const matches = (p: string) => globs.some((g) => matchesGlob(g.includes('/') ? p : basename(p), g));
+  const pairs = diffTrees(task.worktree_path, task.start_tree, tree).filter((p) => matches(p.path));
+  const confirmed = JSON.parse(task.resolved_scripts ?? '{}') as Scripts;
+  const current = resolveScripts((JSON.parse(task.confirmed_spec!) as { units: UnitSpec[] }).units, task.worktree_path);
+  for (const k of new Set([...Object.keys(confirmed), ...Object.keys(current)]))
+    if ((confirmed[k] ?? null) !== (current[k] ?? null)) pairs.push({ path: `package.json#scripts:${k}`, blob: sha256(String(current[k] ?? null)).slice(0, 16) });
+  return addTamper(db, task, pairs, runId);
+}
+
+/** Retention (D-022): open task keeps start + last PASS + last N runs; closed keeps start + final PASS until expiry. */
+export function prune(db: DB, root: string): void {
+  const existing = new Set(listRefs(root, 'refs/cordata/'));
+  const cutoff = Date.now() - CONFIG.retentionDays * 86_400_000;
+  const drop: { ref: string; runId?: number }[] = [];
+  for (const t of db.prepare('SELECT id, status, closed_at FROM task').all() as Pick<Task, 'id' | 'status' | 'closed_at'>[]) {
+    const closed = t.status === 'DONE' || t.status === 'ABANDONED';
+    const expired = closed && (t.closed_at ?? 0) < cutoff;
+    const runs = db.prepare('SELECT id, verdict, ref FROM run WHERE task_id = ? AND ref IS NOT NULL ORDER BY id DESC').all(t.id) as Pick<Run, 'id' | 'verdict' | 'ref'>[];
+    const lastPass = runs.find((r) => r.verdict === 'PASS')?.id;
+    const keep = new Set(expired ? [] : closed ? [lastPass] : [lastPass, ...runs.slice(0, CONFIG.keepRuns).map((r) => r.id)]);
+    for (const r of runs) if (!keep.has(r.id)) drop.push({ ref: r.ref!, runId: r.id });
+    if (expired) drop.push({ ref: `refs/cordata/${t.id}/start` });
+  }
+  deleteRefs(root, drop.map((d) => d.ref).filter((r) => existing.has(r)));
+  const upd = db.prepare('UPDATE run SET ref = NULL WHERE id = ?');
+  tx(db, () => drop.forEach((d) => d.runId && upd.run(d.runId)));
+}
+
+/**
+ * `cordata tick <unit>` (D-021): tick a MANUAL unit with its tree. Once no MANUAL unit is pending, DONE needs a PASS on
+ * the current tree: reuse it when the tree still matches the last PASS, else run the EXEC units now.
+ */
+export async function tick(db: DB, repo: Repo, task: Task, unitId: string, deadline: number): Promise<string> {
+  if (task.status !== 'ACTIVE' && task.status !== 'VERIFIED_PENDING_MANUAL') throw new Error(`task ${task.id} is ${task.status}`);
+  const u = units(db, task.id).find((x) => x.id === unitId);
+  if (!u) throw new Error(`no unit ${unitId} in ${task.id}`);
+  if (u.kind !== 'MANUAL') throw new Error(`${unitId} is an EXEC unit; only Cordata's verification sets it`);
+  const tree = writeTree(task.worktree_path);
+  tx(db, () => {
+    db.prepare("UPDATE unit SET status = 'TICKED', tick_tree = ?, ticked_at = ? WHERE task_id = ? AND id = ?").run(tree, Date.now(), task.id, unitId);
+    event(db, task.id, 'TICKED', { unit: unitId, tree });
+  });
+  const pending = units(db, task.id).filter((x) => x.kind === 'MANUAL' && x.status !== 'TICKED');
+  if (pending.length) return `${unitId} ticked; still pending: ${pending.map((x) => x.id).join(', ')}`;
+  if (task.last_pass_tree === tree) {
+    db.prepare("UPDATE task SET status = 'DONE', closed_at = ?, updated_at = ? WHERE id = ?").run(Date.now(), Date.now(), task.id);
+    event(db, task.id, 'DONE', { via: 'tick', tree });
+    return `${unitId} ticked; ${task.id} DONE (last PASS is on the current tree)`;
+  }
+  const r = await verify(db, repo, getTask(db, task.id)!, { trigger: 'TICK', deadline, force: true });
+  const t = getTask(db, task.id)!;
+  return `${unitId} ticked; the tree changed since the last PASS, so run #${r.run.id} re-verified: ${r.run.verdict}, ${t.id} ${t.status}`;
 }

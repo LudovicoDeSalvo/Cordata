@@ -1,6 +1,6 @@
 # Cordata — agent instructions
 
-Cordata is a local, hook-driven tool (no daemon, D-014) that gives Claude Code durable tasks with executable acceptance. Slice 1 is in progress (milestone A done). Read `docs/STATUS.md` first.
+Cordata is a local, hook-driven tool (no daemon, D-014) that gives Claude Code durable tasks with executable acceptance. Slice 1 is implemented; dogfooding is next. Read `docs/STATUS.md` first.
 
 ## Project memory
 
@@ -23,7 +23,7 @@ Cordata is a local, hook-driven tool (no daemon, D-014) that gives Claude Code d
 
 Run from the repo root (Node ≥ 24.15; `.ts` runs directly, no build):
 
-- `npm test` — `node:test` unit suites + fixture e2e (`test/e2e.test.ts`); tests that call user-only verbs strip `CLAUDE_CODE_CHILD_SESSION` themselves.
+- `npm test` — `node:test` unit suites + fixture e2e (`test/e2e.test.ts`, E1–E12); tests that call user-only verbs strip `CLAUDE_CODE_CHILD_SESSION` themselves.
 - `npm run typecheck` — `tsc --noEmit` (strict, erasable syntax only: no enums, namespaces or parameter properties).
 - `scripts/smoke.sh` — real headless Claude Code run of the Stop gate (`--model haiku`, uses plan usage); run only when the gate or hook contract changes. It never touches `~/.claude/settings.json` or `~/.cordata`.
 - Never run `cordata install` without `--settings <tmp file>` from an agent session: the default target is the user's live `~/.claude/settings.json`.

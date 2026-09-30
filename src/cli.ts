@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { installHooks, runHook, type HookInput } from './claude.ts';
+import { hookProblems, hostWarnings, installHooks, runHook, type HookInput } from './claude.ts';
 import { resolveRepo, type Repo } from './git.ts';
 import { projection, statusText } from './projection.ts';
 import { CONFIG, openStore, type DB } from './store.ts';
-import { confirmTask, newTask, openTask, pickTask } from './task.ts';
-import { abortCurrent, verify } from './verify.ts';
+import { closeTask, confirmTask, newTask, openTask, pickTask } from './task.ts';
+import { abortCurrent, tick, verify } from './verify.ts';
 
 const started = Date.now();
 const USAGE = `usage: cordata <command>
@@ -17,6 +17,8 @@ const USAGE = `usage: cordata <command>
   confirm [task]                validate and freeze the spec (user-only)
   status [task]                 show the task, runs, snapshots and sessions
   verify [--force]              run the EXEC units now
+  tick <unit> [task]            accept a MANUAL unit; re-verifies if the tree changed since the last PASS (user-only)
+  done [task] | abandon [task]  close the task regardless of units (user-only)
   hook <Event>                  Claude Code hook entry (reads JSON on stdin)`;
 
 /** D-016: these verbs are the user's, not the model's. Claude Code sets the variable in Bash, hooks and `!` mode. */
@@ -62,6 +64,8 @@ export async function main(argv: string[]): Promise<number> {
       if (!path) throw new Error('--settings needs a path');
       const r = installHooks(path, fileURLToPath(import.meta.url));
       console.log(r.changed ? `Cordata hooks written to ${path}${r.backup ? ` (backup: ${r.backup})` : ''}` : `Cordata hooks already current in ${path}`);
+      const s = JSON.parse(readFileSync(path, 'utf8')) as { sandbox?: { enabled?: boolean } };
+      if (s.sandbox?.enabled) console.log('Warning: the Claude Code sandbox is enabled, but Cordata verifiers run outside it (D-019).');
       return 0;
     }
     case 'new': {
@@ -90,7 +94,8 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       const t = args[0] ? pickTask(db, repo.root, args[0]) : (openTask(db, repo.root) ?? tryPick(db, repo.root));
-      console.log(statusText(db, repo.root, t));
+      const extra = t && t.status !== 'DRAFT' ? [...hostWarnings(db, t), ...hookProblems()] : hookProblems();
+      console.log(statusText(db, repo.root, t, extra));
       return 0;
     }
     case 'verify': {
@@ -102,6 +107,24 @@ export async function main(argv: string[]): Promise<number> {
       if (r.reused) console.log(`Tree unchanged since run #${r.run.id}; reused (use --force to re-run).`);
       console.log(projection(db, openTask(db, repo.root) ?? t));
       return r.run.verdict === 'PASS' ? 0 : 1;
+    }
+    case 'tick': {
+      requireUser('tick');
+      if (!args[0]) throw new Error('usage: cordata tick <unit> [task]');
+      const repo = repoHere();
+      const db = store(repo);
+      console.log(await tick(db, repo, pickTask(db, repo.root, args[1]), args[0], started + CONFIG.budgetMs));
+      return 0;
+    }
+    case 'done':
+    case 'abandon': {
+      requireUser(cmd);
+      const repo = repoHere();
+      const db = store(repo);
+      const t = pickTask(db, repo.root, args[0]);
+      closeTask(db, t, cmd === 'done' ? 'DONE' : 'ABANDONED');
+      console.log(`${t.id} ${cmd === 'done' ? 'DONE (override)' : 'ABANDONED'}`);
+      return 0;
     }
     default:
       console.log(USAGE);

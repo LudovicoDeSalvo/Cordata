@@ -1,6 +1,6 @@
 # Cordata architecture (target, v1)
 
-Status: **partly implemented** (2026-09-30). Milestone A of slice 1 is built: store, snapshots, spec confirm, verifier runner, `SessionStart` projection, `Stop` gate, CLI `install | new | confirm | status | verify`. Not built yet (milestone B): journal hooks, `UserPromptSubmit` attach (D-024), tamper detection, `ConfigChange`, `tick | done | abandon`, ref pruning, large-file and sandbox warnings. Statements about those describe the agreed target. Decisions: `docs/DECISIONS.md` (D-001 … D-025). The three documents in `base-docs/` are superseded inputs.
+Status: **slice 1 implemented** (2026-09-30), not yet dogfooded. Built: store, snapshots, spec confirm, verifier runner, all seven hooks (`SessionStart`, `UserPromptSubmit` with D-024 attach, `Stop` gate, async journal hooks, `ConfigChange`), tamper detection, ref pruning, warnings, CLI `install | new | confirm | status | verify | tick | done | abandon`. Not built: skills (`/cordata:new` etc.), `log`, and every row of "Deferred, with triggers". Decisions: `docs/DECISIONS.md` (D-001 … D-025). The three documents in `base-docs/` are superseded inputs.
 
 ## One sentence
 
@@ -34,7 +34,7 @@ flowchart LR
 ```
 
 - **Hook entry** (`cordata hook <event>`): reads the event JSON from stdin, calls core, prints the response JSON to stdout, always exits 0. Installed once by `cordata install` into `~/.claude/settings.json` (D-022) as `command` hooks: `SessionStart`, `UserPromptSubmit`, `Stop` (`timeout: 1800`, D-018) synchronous; `PreToolUse`, `PostToolUse`, `PostToolUseFailure` with `async: true` and matcher `Bash|Edit|Write|NotebookEdit|mcp__.*` (D-017); `ConfigChange` async (D-020). Inert where no task is attached. The Stop process runs verifiers itself, inheriting the session's environment, unsandboxed (D-019).
-- **Core + store** (flat `src/`, D-025): `claude.ts` (the only host-aware file: event → core call → response shape, `install`), `task.ts` (lifecycle and units), `spec.ts`, `verify.ts` (runner, record path, Stop gate), `git.ts` (snapshots, refs), `projection.ts`, `store.ts`; `journal.ts` in milestone B. SQLite via `node:sqlite`, WAL mode, busy timeout; every process opens, writes in a transaction, exits.
+- **Core + store** (flat `src/`, D-025): `claude.ts` (the only host-aware file: event → core call → response shape, `install`), `task.ts` (lifecycle and units), `spec.ts`, `verify.ts` (runner, record path, Stop gate), `git.ts` (snapshots, refs), `projection.ts`, `store.ts`, `journal.ts` (action journal, heuristic effect classifier). SQLite via `node:sqlite`, WAL mode, busy timeout; every process opens, writes in a transaction, exits.
 - **CLI** (`cordata`): `install`, `new`, `confirm`, `status`, `verify`, `tick`, `log`, `done`, `abandon` (no `restore`, D-025). `confirm`, `tick`, `done`, `abandon` are user-only: they refuse when `CLAUDE_CODE_CHILD_SESSION=1` (D-016).
 - **Skills**: `/cordata:new`, `/cordata:status`, `/cordata:confirm` as Claude Code skills that tell the model to read package scripts and CI config, draft the spec file with Edit, and then ask the user to run the user-only command in their own terminal.
 
