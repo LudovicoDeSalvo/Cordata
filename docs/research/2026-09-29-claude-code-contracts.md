@@ -24,7 +24,7 @@ Source: official docs via claude-code-guide subagent. URLs: https://code.claude.
 
 ## Environment
 
-- `CLAUDECODE=1` in Bash/hook/MCP subprocesses (also IDE terminals); `CLAUDE_CODE_CHILD_SESSION=1` only in Claude Code-spawned Bash/Monitor/hook/statusline subprocesses.
+- `CLAUDECODE=1` in Bash/hook/MCP subprocesses (also IDE terminals); `CLAUDE_CODE_CHILD_SESSION=1` only in Claude Code-spawned Bash/Monitor/hook/statusline subprocesses; also set in the user's `!` shell mode (observed 2026-09-30).
 
 ## Headless and billing
 

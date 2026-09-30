@@ -153,7 +153,7 @@ Architecture decisions for Cordata. Status `accepted` means the user confirmed i
 - Context: `cordata confirm | tick | done | abandon` were reachable by the model through its Bash tool, and the planned confirm skill had the model run `confirm`, so "confirmed by the user" meant "confirmed by the model" (red-team F5).
 - Decision: The model is untrusted but not assumed to be a deliberate adversary with the user's uid: Cordata aims to be tamper-evident against drift and reward hacking, not tamper-proof. The user-only verbs refuse to run when `CLAUDE_CODE_CHILD_SESSION=1`, which Claude Code sets in its Bash and hook subprocesses. Skills draft or edit the spec and then ask the user to run the command in their own terminal. A journaled Bash command that mentions a user-only verb, `~/.cordata` or the Cordata database adds a MANUAL tamper unit to the attached task.
 - Alternatives: additionally write ask/deny permission rules for `Bash(cordata confirm:*)` etc. (bypassable, extra prompts); no guard.
-- Consequences: `env -u` or direct SQLite writes still bypass the check, but leave a journal trace. [U] whether Claude Code's `!` shell mode sets the variable; if it does, the user needs a separate terminal.
+- Consequences: `env -u` or direct SQLite writes still bypass the check, but leave a journal trace. Claude Code's `!` shell mode also sets the variable (verified 2026-09-30), so the user runs user-only verbs in a separate terminal.
 - References: `docs/research/2026-09-29-plan-redteam.md` F5; amends D-008, D-012.
 
 ## D-017: Journal scope; slice-1 cuts

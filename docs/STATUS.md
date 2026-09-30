@@ -28,11 +28,11 @@ Red-team the plan and resolve every finding before implementation. **Done 2026-0
 ## Blockers and questions
 
 - None blocking slice 1.
-- Open: license if published (user's choice). [U] whether Claude Code's `!` shell mode sets `CLAUDE_CODE_CHILD_SESSION` (D-016): user runs `! echo "child=$CLAUDE_CODE_CHILD_SESSION"` in an interactive session; `child=1` means user-only verbs need a separate terminal.
+- Open: license if published (user's choice).
 
 ## Validation
 
-No code. Checked 2026-09-30: the Bash tool env has `CLAUDE_CODE_CHILD_SESSION=1` (D-016 guard premise holds for model Bash). `@anthropic-ai/sandbox-runtime` 0.0.78 on npm ships CLI `srt` (`srt [--settings file] <cmd>`, config `~/.srt-settings.json`, uses bubblewrap on Linux) — read from the npm readme, not executed; D-019's revisit also needs `bwrap` installed. Checked 2026-09-29: raw docs from code.claude.com (hooks, sandboxing, permission-modes, env-vars, tools-reference, interactive-mode, goal); local `node:sqlite` works on Node 24.15.0; tree refs under `refs/cordata/*` survive `git log --all`/`gc`/`fsck` on git 2.34.1; `git checkout <tree> -- .` writes the index, `git restore --source=<tree> --worktree -- .` does not; `bwrap` not installed; Node cold start + sqlite WAL insert 20–40 ms. Headless Stop-hook smoke on Claude Code 2.1.284 (`--model haiku`): block shape and `stop_hook_active` behave as the docs say.
+No code. Checked 2026-09-30: `CLAUDE_CODE_CHILD_SESSION=1` in both the model's Bash tool and the user's `!` shell mode (D-016: user-only verbs need a separate terminal). `@anthropic-ai/sandbox-runtime` 0.0.78 on npm ships CLI `srt` (`srt [--settings file] <cmd>`, config `~/.srt-settings.json`, uses bubblewrap on Linux) — read from the npm readme, not executed; D-019's revisit also needs `bwrap` installed. Checked 2026-09-29: raw docs from code.claude.com (hooks, sandboxing, permission-modes, env-vars, tools-reference, interactive-mode, goal); local `node:sqlite` works on Node 24.15.0; tree refs under `refs/cordata/*` survive `git log --all`/`gc`/`fsck` on git 2.34.1; `git checkout <tree> -- .` writes the index, `git restore --source=<tree> --worktree -- .` does not; `bwrap` not installed; Node cold start + sqlite WAL insert 20–40 ms. Headless Stop-hook smoke on Claude Code 2.1.284 (`--model haiku`): block shape and `stop_hook_active` behave as the docs say.
 
 ## Resumption notes
 
